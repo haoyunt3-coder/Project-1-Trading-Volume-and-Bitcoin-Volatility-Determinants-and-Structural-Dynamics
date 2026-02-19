@@ -1,0 +1,198 @@
+---
+title: "proj"
+output: word_document
+date: "2026-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+set up
+```{r}
+
+library(tidyverse)
+library(lubridate)
+library(skimr)
+library(ggcorrplot)
+library(broom)
+library(sandwich)
+library(lmtest)
+
+set.seed(42)
+
+
+```
+
+
+importdata & checking
+```{r}
+
+df_raw <- readr::read_csv("merged_data.csv", show_col_types = FALSE)
+glimpse(df_raw)
+skim(df_raw)
+na_summary <- df_raw %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "col", values_to = "na_count") %>%
+  arrange(desc(na_count))
+na_summary
+
+```
+
+
+
+BTC
+```{r}
+library(tidyverse)
+library(lubridate)
+library(skimr)
+
+
+df <- df_raw %>%
+  filter(Symbol == "BTC") %>%
+  mutate(
+    date = as.Date(Date),
+    year = year(date),
+    month = month(date),
+    wday = wday(date, label = TRUE, week_start = 1),
+    is_weekend = wday %in% c("Sat", "Sun")
+  ) %>%
+  arrange(date)
+
+glimpse(df)
+skim(df %>% select(date, year, month, wday, is_weekend))
+
+
+```
+
+seems good
+
+
+
+```{r}
+
+names(df)
+df <- df %>%
+  mutate(vol = `σ_Rt`)
+summary(df$vol)
+
+ggplot(df, aes(x = vol)) +
+  geom_histogram(bins = 60) +
+  labs(
+    title = "3.1 Distribution of Bitcoin Volatility",
+    x = "Volatility",
+    y = "Count"
+  )
+ggplot(df, aes(x = date, y = vol)) +
+  geom_line() +
+  labs(
+    title = "3.2 Bitcoin Volatility Over Time",
+    x = "Date",
+    y = "Volatility"
+  )
+
+
+```
+
+
+corr analysis
+```{r}
+
+df_analysis <- df %>%
+  select(
+    date,
+    vol,
+    log_volume = Log_Volume,
+    volume = Volume,
+    news = European_News_Index,
+    sepu = SEPU,
+    btc_dom = BitcoinDominance,
+    ret = Return
+  )
+library(ggcorrplot)
+
+corr_mat <- cor(
+  df_analysis %>% select(-date),
+  use = "pairwise.complete.obs"
+)
+
+ggcorrplot(corr_mat, type = "lower", lab = TRUE) +
+  ggtitle("3.3Correlation Matrix: Volatility and Potential Factors")
+ggplot(df_analysis, aes(x = log_volume, y = vol)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(
+    title = "3.4Trading Volume vs Bitcoin Volatility",
+    x = "Log Trading Volume",
+    y = "Volatility"
+  )
+
+
+```
+
+
+```{r}
+
+corr_rank <- df_analysis %>%
+  select(-date) %>%
+  summarise(across(everything(), ~cor(.x, df_analysis$vol, use = "pairwise.complete.obs"))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "corr_with_vol") %>%
+  filter(variable != "vol") %>%
+  mutate(abs_corr = abs(corr_with_vol)) %>%
+  arrange(desc(abs_corr))
+
+corr_rank
+knitr::kable(
+  corr_rank,
+  caption = "Table 3.1: Correlation Ranking of Potential Influencing Factors"
+)
+
+ggplot(df_analysis, aes(x = log_volume, y = vol)) +
+  geom_point(alpha = 0.25) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = "Log Trading Volume vs Bitcoin Volatility",
+    x = "Log Trading Volume",
+    y = "Volatility"
+  )
+ggplot(df_analysis, aes(x = news, y = vol)) +
+  geom_point(alpha = 0.25) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = "European News Index vs Bitcoin Volatility",
+    x = "European News Index",
+    y = "Volatility"
+  )
+
+```
+
+
+
+```{r}
+library(dplyr)
+library(lmtest)
+library(sandwich)
+library(stargazer)
+df_model <- df_analysis %>%
+  mutate(
+    log_volume_l1 = lag(log_volume, 1),
+    news_l1 = lag(news, 1),
+    sepu_l1 = lag(sepu, 1),
+    btc_dom_l1 = lag(btc_dom, 1),
+    ret_l1 = lag(ret, 1)
+  ) %>%
+  drop_na()
+
+m1 <- lm(vol ~ log_volume_l1 + news_l1 + sepu_l1 + btc_dom_l1 + ret_l1, data = df_model)
+
+
+summary(m1)
+
+coeftest(m1, vcov. = NeweyWest(m1, lag = 5, prewhite = FALSE, adjust = TRUE))
+stargazer(m1, type="text")
+
+
+```
+
+
